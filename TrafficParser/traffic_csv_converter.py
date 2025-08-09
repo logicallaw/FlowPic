@@ -16,8 +16,12 @@ INPUT_DIR = "../raw_csvs/classes/chat/vpn/"
 CLASSES_DIR = "../raw_csvs/classes/**/**/"
 
 # LABEL_IND = 1
+
+# FlowPic 한 장이 표현하는 시간 길이 (논문에서도 기본 60초 사용함)
 TPS = 60 # TimePerSession in secs
+# 세션 슬라이딩 간격. TPS와 같으면 블록이 겹치지 않음
 DELTA_T = 60 # Delta T between splitted sessions
+# 블록 내에서 최소 50초 이상의 실제 데이터가 있어야 유효함
 MIN_TPS = 50
 
 # def insert_dataset(dataset, labels, session, label_ind=LABEL_IND):
@@ -64,15 +68,22 @@ def traffic_csv_converter(file_path):
         reader = csv.reader(csv_file)
         for i, row in enumerate(reader):
             # print row[0], row[7]
-            session_tuple_key = tuple(row[:8])
+
+            # 세션 식별 정보
+            # session_tuple_key = tuple(row[:8])
+
+            # row[7](= L)은 패킷 개수
             length = int(row[7])
+            # L개의 타임스탬프
             ts = np.array(row[8:8+length], dtype=float)
+            # L개의 패킷 크기
             sizes = np.array(row[9+length:], dtype=int)
 
             # if (sizes > MTU).any():
             #     a = [(sizes[i], i) for i in range(len(sizes)) if (np.array(sizes) > MTU)[i]]
             #     print len(a), session_tuple_key
-
+            
+            # 패킷 개수가 10개 이하의 세션은 버림
             if length > 10:
                 # print ts[0], ts[-1]
                 # h = session_2d_histogram(ts, sizes)
@@ -81,12 +92,33 @@ def traffic_csv_converter(file_path):
                 # counter += 1
                 # if counter % 100 == 0:
                 #     print counter
-
+                
+                """
+                t: 블록 인덱스
+                각 블록은 DELTA_T(60초) 간격으로 순서대로 생성함.
+                ts[-1]: 세션에서 마지막 패킷의 도착 시간
+                TPS: 한 블록의 길이 (60초)
+                DELTA_A: 블록 시간점 간 간격 (60초)
+                int(ts[-1]/DELTA_T - TPS/DELTA_T) + 1: int(세션총길이/간격 - 블록길이/간격) + 1
+                """
                 for t in range(int(ts[-1]/DELTA_T - TPS/DELTA_T) + 1):
+                    """
+                    t * DELTA_T: 이번 블록의 시간 시간
+                    t * DELTA_T + TPS: 이번 블록의 끝 시간
+                    mask: True, False 배열. 이번 블록의 시간 범위에 속하는 패킷만 True
+
+                    t가 1이면 시작은 60초, 끝은 120초. 60초~120초에 도착한 패킷만 선택함
+                    """
                     mask = ((ts >= t * DELTA_T) & (ts <= (t * DELTA_T + TPS)))
                     # print t * DELTA_T, t * DELTA_T + TPS, ts[-1]
                     ts_mask = ts[mask]
                     sizes_mask = sizes[mask]
+
+                    """
+                    유효한 블록 필터링:
+                    - 패킷이 10개 이상 있어야 함
+                    - 블록 내 첫 패킷 ~ 마지막 패킷 차이 >= MIN_TPS(50초) 이어야 함
+                    """
                     if len(ts_mask) > 10 and ts_mask[-1] - ts_mask[0] > MIN_TPS:
                         # if "facebook" in session_tuple_key[0]:
                         #     session_spectogram(ts[mask], sizes[mask], session_tuple_key[0])
@@ -96,8 +128,11 @@ def traffic_csv_converter(file_path):
                         # else:
                         #     continue
 
+                        # 해당 블록 구간 데이터를 정규화 + 2D 히스토그램 -> FlowPic 생성
                         h = session_2d_histogram(ts_mask, sizes_mask)
                         # session_spectogram(ts_mask, sizes_mask, session_tuple_key[0])
+
+                        # h를 1차원으로 (벡터로) 만들고 dataset에 저장함 
                         dataset.append([h])
                         counter += 1
                         if counter % 100 == 0:
